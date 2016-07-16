@@ -1,0 +1,154 @@
+---
+title: "Machine Learning Course Project"
+author: "Lyle McMillin"
+date: "July 16, 2016"
+output: html_document
+---
+###Overview
+
+####Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+
+####Project Objective
+The goal of this project is to use data from accelerometers on the belt, forearm, arm and dumbbell of 6 participants to predict the manner in which they did the exercise (indicated by the "classe" variable in the training dataset).
+
+####Data Source
+The data for this project was provided by:
+
+Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6. 
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz4EbEkCdnh
+
+##Data Analysis
+
+###Libraries
+Load any required libraries.
+```{r, warning=FALSE}
+suppressMessages(library(dplyr))
+suppressMessages(library(ggplot2))
+suppressMessages(library(caret))
+```
+
+###Load the data
+
+Read the training and testing data into the "pml-training" and "pml-testing" data sets. 
+```{r, cache=TRUE, warning=FALSE}
+pml.train.dat <- read.csv("dat/pml-training.csv", stringsAsFactors = FALSE)
+pml.test.dat <- read.csv("dat/pml-testing.csv", stringsAsFactors = FALSE)
+        
+#Convert all of the middle columns to numeric
+pml.train.dat[,7:159] <- as.numeric(unlist(pml.train.dat[,7:159]))
+pml.test.dat[,7:159] <- as.numeric(unlist(pml.test.dat[,7:159]))
+```
+
+###Data Exploration
+```{r}
+dim(pml.train.dat)
+
+str(pml.train.dat)
+```
+It appears that many of the variables are very heavy with NAs.  I am going to run a count of NAs per column to determin the extent of their presense.
+
+```{r, warning=FALSE}
+qplot(sapply(pml.train.dat, function(x) sum(is.na(x))), geom = "histogram", col = I("blue"))
+```
+
+The above graph shows that many of the columns have a significant number of NAs.  To aid in my predictor selection I will now create a for loop to remove those columns from my analysis as imputation will most likely not be an option for those columns.
+
+```{r}
+#vector count variable
+ct <- 1
+remove.col <- as.vector(0)
+per.na <- .9 * nrow(pml.train.dat) 
+
+for (i in 1:ncol(pml.train.dat)) {
+        num.na <- NULL
+        #threshold of NAs per column based off of percentage
+
+        num.na <- sum(is.na(pml.train.dat[,i]))
+        if (!is.null(num.na)) {       
+                if (num.na > per.na) {
+                        remove.col[ct] <- i#names(pml.train.dat)[i]
+                        ct <- ct + 1
+                }
+        }
+}
+
+```
+
+There were `r length(remove.col)` columns that contained NAs in excess of 90%.  Those columns will be removed before selecting predictors.
+
+```{r}
+#Removing columns from pml.train.dat
+pml.train.dat <- pml.train.dat[,-remove.col]
+```
+
+For the purposes of my analysis, I am going to split the "pml.training.dat" dataset again to create another testing set.
+
+```{r}
+pml.data.sep <- createDataPartition(pml.train.dat$classe, p = .8, list = FALSE)
+pml.train.dat.1 <- pml.train.dat[pml.data.sep,]
+pml.train.dat.2 <- pml.train.dat[-pml.data.sep,]
+```
+
+##Predictor Analysis
+
+I will now seek to select predictors for my model.  First I will analyze the importance of each variable to determine which variables should be included in my initial test.
+
+```{r, cache=TRUE, warning=FALSE}
+set.seed(1000)
+
+control <- rfeControl(functions=rfFuncs, method="cv", number=10)
+
+pred.results <- rfe(pml.train.dat.1[,8:59], as.factor(pml.train.dat.1[,60]), rfeControl=control)
+
+print(pred.results)
+```
+
+Based off of these results, it appears that 4 variables will deliver almost 95% accurracy and 8 variables will deliver over 98% accuracy.  
+
+The following graph shows a significan gain to be had using the Top 10 variables.  For the next round of testing, I will chose the Top 10 variables.  In my training set I will enable cross validation to filter my predictors down from there.
+
+```{r}
+plot(pred.results, type = c("g", "o"))
+```
+
+
+##Model Building
+For this exercise, I will build a model using the top 10 variables from my test and fitting the model using random forests.  Cross validation will be enable in the training control to provide further feedback as to the effectiveness of my model.
+
+Those variables are:  `r predictors(pred.results)[1:10]`.
+
+```{r, cache=TRUE}
+pml.modfit <- train(classe ~ roll_belt + yaw_belt + magnet_dumbbell_z + pitch_belt + magnet_dumbbell_y + pitch_forearm + accel_dumbbell_y + roll_forearm + roll_dumbbell + magnet_forearm_z, method = "rf", data = pml.train.dat.1, trControl = trainControl(method = "cv"))
+
+pml.modfit
+```
+
+From the cross validation included in this exercise it appears that "mtry 2" using 6 variables was the optimal selection.  This model (pml.modfit) will be the model used going forward for my predictions.
+
+##Prediction
+I will now predict using the first test set (taken from the original training set).
+
+```{r, warning=FALSE}
+pml.predict <- suppressMessages(predict(pml.modfit, newdata = pml.train.dat.2))
+
+confusionMatrix(pml.predict, pml.train.dat.2$classe)
+```
+
+##Conclusion
+
+###First Test Results
+The results show that this model is producing 99% accuracy on the first test set (a subset of the original training set).  These results are in line with the estimates set for in the cross validation exercise.
+
+With this results I am confident that I now have the correct model to proceed to the official testing set.
+
+###Final Predictions
+
+Below are the final predictions based off of the test set using the pml.modfit model.
+```{r}
+final.test.predict <- predict(pml.modfit, newdata = pml.test.dat)
+
+final.test.predict
+```
+
